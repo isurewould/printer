@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Captured Photos</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style>
+    input[type=range] { width: 100%; }
+    canvas { border: 1px solid #ccc; border-radius: 8px; }
+  </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+  <h1 class="text-4xl font-bold mb-6">🖼️ Captured Photos</h1>
+  <a href="/" class="btn btn-primary mb-6">Back to Live View</a>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-6xl">
+    {% for photo in photos %}
+      <div class="card bg-white shadow-xl p-4 flex flex-col items-center">
+        <figure>
+          <img src="{{ url_for('photo_file', filename=photo) }}"
+               alt="{{ photo }}"
+               class="rounded-lg w-64 h-auto object-cover cursor-pointer"
+               onclick="openModal('{{ url_for('photo_file', filename=photo) }}', '{{ photo }}')">
+        </figure>
+        <div class="card-body items-center text-center mt-2">
+          <p class="text-sm text-gray-600">{{ photo }}</p>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Modal -->
+  <dialog id="photoModal" class="modal">
+    <form method="dialog" class="modal-box max-w-4xl w-full">
+      <div class="w-full flex flex-col items-center mb-4">
+        <p class="font-bold mb-2">Preview</p>
+        <div class="flex flex-col md:flex-row gap-4 justify-center">
+          <div>
+            <p class="text-sm text-center mb-1">Adjusted Image</p>
+            <canvas id="previewCanvas" width="384"></canvas>
+          </div>
+          <div>
+            <p class="text-sm text-center mb-1">Thermal Preview</p>
+            <canvas id="ditherCanvas" width="384"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="w-full space-y-2 mb-4">
+        <label>Brightness 
+          <input type="range" min="0.5" max="2.0" step="0.1" value="1" id="brightnessSlider">
+        </label>
+        <label>Contrast 
+          <input type="range" min="0.5" max="3.0" step="0.1" value="1" id="contrastSlider">
+        </label>
+      </div>
+
+      <div class="modal-action justify-between">
+        <button class="btn" type="submit">Close</button>
+        <button type="button" class="btn btn-secondary" onclick="sendToPrinter()">🖨️ Print</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const modal = document.getElementById('photoModal');
+    const previewCanvas = document.getElementById('previewCanvas');
+    const ditherCanvas = document.getElementById('ditherCanvas');
+    const previewCtx = previewCanvas.getContext('2d');
+    const ditherCtx = ditherCanvas.getContext('2d');
+    const brightnessSlider = document.getElementById('brightnessSlider');
+    const contrastSlider = document.getElementById('contrastSlider');
+
+    let originalImage = new Image();
+    let currentFilename = '';
+
+    function openModal(imageUrl, filename) {
+      currentFilename = filename;
+      originalImage.crossOrigin = "Anonymous";
+      originalImage.onload = () => {
+        const newHeight = originalImage.height * (384 / originalImage.width);
+        previewCanvas.height = ditherCanvas.height = newHeight;
+        previewCanvas.width = ditherCanvas.width = 384;
+        updatePreview();
+      };
+      originalImage.src = imageUrl;
+      modal.showModal();
+    }
+
+    brightnessSlider.oninput = updatePreview;
+    contrastSlider.oninput = updatePreview;
+
+    function updatePreview() {
+      previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+      previewCtx.filter = `brightness(${brightnessSlider.value}) contrast(${contrastSlider.value})`;
+      previewCtx.drawImage(originalImage, 0, 0, previewCanvas.width, previewCanvas.height);
+
+      // Dither
+      const imgData = previewCtx.getImageData(0, 0, previewCanvas.width, previewCanvas.height);
+      const dithered = floydSteinbergDither(imgData);
+      ditherCtx.putImageData(dithered, 0, 0);
+    }
+
+    function floydSteinbergDither(imageData) {
+      const data = imageData.data;
+      const width = imageData.width;
+
+      for (let y = 0; y < imageData.height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          const oldPixel = data[idx];
+          const newPixel = oldPixel < 128 ? 0 : 255;
+          const error = oldPixel - newPixel;
+
+          data[idx] = data[idx + 1] = data[idx + 2] = newPixel;
+
+          const applyError = (offsetX, offsetY, factor) => {
+            const newX = x + offsetX;
+            const newY = y + offsetY;
+            if (newX < 0 || newX >= width || newY < 0 || newY >= imageData.height) return;
+            const newIdx = (newY * width + newX) * 4;
+            for (let i = 0; i < 3; i++) {
+              data[newIdx + i] = Math.max(0, Math.min(255, data[newIdx + i] + error * factor));
+            }
+          };
+
+          applyError(1, 0, 7 / 16);
+          applyError(-1, 1, 3 / 16);
+          applyError(0, 1, 5 / 16);
+          applyError(1, 1, 1 / 16);
+        }
+      }
+
+      return imageData;
+    }
+
+    function sendToPrinter() {
+      const dataUrl = previewCanvas.toDataURL('image/png');
+      fetch('/preview-print', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: dataUrl,
+          filename: currentFilename,
+          brightness: brightnessSlider.value,
+          contrast: contrastSlider.value
+        })
+      }).then(res => {
+        if (res.ok) {
+          alert("Printing started!");
+          modal.close();
+        } else {
+          alert("Failed to print.");
+        }
+      });
+    }
+  </script>
+</body>
+</html>

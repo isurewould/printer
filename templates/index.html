@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Live Camera Stream</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style>
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 384px;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 6rem;
+      font-weight: bold;
+      color: white;
+      text-shadow: 2px 2px 5px black;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .relative-container {
+      position: relative;
+      display: inline-block;
+    }
+
+    canvas {
+      display: none;
+    }
+
+    #previewImage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 384px;
+      height: auto;
+      display: none;
+      z-index: 9;
+    }
+  </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+
+  <h1 class="text-4xl font-bold mb-6">📷 Live Camera Stream</h1>
+
+  <div class="card bg-white shadow-xl p-4">
+    <div class="relative-container">
+      <img id="videoFeed" src="{{ url_for('video_feed') }}" class="rounded-lg w-96 h-auto" crossorigin="anonymous" />
+      <img id="previewImage" class="rounded-lg w-96 h-auto" />
+      <div id="overlay"></div>
+      <canvas id="hiddenCanvas" width="640" height="480"></canvas>
+    </div>
+    <div class="card-body items-center text-center space-y-2">
+      <button id="captureBtn" class="btn btn-primary">Capture Photo</button>
+      <a href="/photos" class="btn btn-secondary">View Photos</a>
+      <button id="stripBtn" class="btn btn-accent">📸 Make Photo Strip</button>
+    </div>
+  </div>
+
+  <script>
+    const captureBtn = document.getElementById("captureBtn");
+    const stripBtn = document.getElementById("stripBtn");
+    const overlay = document.getElementById("overlay");
+    const videoFeed = document.getElementById("videoFeed");
+    const previewImage = document.getElementById("previewImage");
+    const canvas = document.getElementById("hiddenCanvas");
+    const ctx = canvas.getContext("2d");
+
+    captureBtn.addEventListener("click", async () => {
+      const res = await fetch("/capture", { method: "POST" });
+      alert(res.ok ? "Photo captured!" : "Failed to capture photo.");
+    });
+
+    stripBtn.addEventListener("click", async () => {
+      stripBtn.disabled = true;
+      const images = [];
+
+      for (let i = 0; i < 3; i++) {
+        await showCountdown();
+        const imageData = await captureFrame();  // Waits for fresh frame
+        images.push(imageData);
+        await showPreview(imageData);            // Show it briefly
+      }
+
+      const res = await fetch("/make_strip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images })
+      });
+
+      alert(res.ok ? "Photo strip created!" : "Failed to create strip.");
+      stripBtn.disabled = false;
+    });
+
+    async function showCountdown() {
+      for (let i = 3; i > 0; i--) {
+        overlay.innerText = i;
+        await sleep(1000);
+      }
+      overlay.innerText = "";
+    }
+
+    async function captureFrame() {
+      await sleep(200);  // Let the stream refresh
+      ctx.drawImage(videoFeed, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg");
+    }
+
+    async function showPreview(imageData) {
+      previewImage.src = imageData;
+      previewImage.style.display = "block";
+      videoFeed.style.visibility = "hidden";
+      await sleep(1500);
+      previewImage.style.display = "none";
+      videoFeed.style.visibility = "visible";
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+  </script>
+
+</body>
+</html>
